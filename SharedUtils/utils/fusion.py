@@ -1,4 +1,4 @@
-from typing import Any, Callable, Optional
+from typing import Callable, Optional, cast
 import adsk.core, adsk.fusion
 from adsk.core import Point3D
 from . import misc
@@ -19,8 +19,9 @@ def traverse_occurrence_tree(occurence: Optional[adsk.fusion.Occurrence], proces
     process : A function that takes an occurrence or the root component and returns True to stop the search, False to continue.
     """
     previous = None
-    root_component = adsk.core.Application.get().activeProduct.rootComponent
-    current = occurence or root_component
+    design = cast(adsk.fusion.Design, adsk.core.Application.get().activeProduct)
+    root_component = design.rootComponent
+    current: adsk.fusion.Occurrence | adsk.fusion.Component = occurence or root_component
 
     def search_down(occ) -> bool:
         # Search this component first
@@ -50,6 +51,7 @@ def traverse_occurrence_tree(occurence: Optional[adsk.fusion.Occurrence], proces
             break
 
         # 2. Move up to parent
+        assert(isinstance(current, adsk.fusion.Occurrence))
         occ_ctx = current.assemblyContext
         child_occurrences = None
         if not occ_ctx:
@@ -89,8 +91,9 @@ def new_event_handler(handler, superclass):
 	return EventHandler()
 
 def log(message):
-	userInterface = adsk.core.Application.get().userInterface
-	userInterface.palettes.itemById('TextCommands').writeText(message)
+    userInterface = adsk.core.Application.get().userInterface
+    textPalette = cast(adsk.core.TextCommandPalette, userInterface.palettes.itemById('TextCommands'))
+    textPalette.writeText(message)
 
 def handleException():
 	frameInfo = inspect.stack()[1]

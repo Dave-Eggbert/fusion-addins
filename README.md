@@ -11,11 +11,17 @@ Furthermore, updates to this code might break existing usages of the addins.
 - **Pattern Cutouts**
 
   This is a collection of differently shaped pattern cutouts, e.g. triangles, rhombuses etc.
-		
-  There's also a "Froli" pattern, which computes the best froli grid for a given rectangular surface and places cutouts accordingly.
+
+  The Froli pattern computes the best froli grid for a given rectangular surface and places cutouts accordingly.
+
+  The adaptive cutout takes out all the material, but takes features within the face into account and leaves material around them.
+  If the cutout goes all the way through the board, it will attach the material for inner features to the outer rim of the board.
 - **Concealed Hinge**
 
   This places holes for concealed hinges in the door and carcass boards. Currently there's just one type of hinge implemented (Blum cliptop 110 for thin doors).
+- **Door Latch**
+
+  Places holes for door latches in the door and carcass boards. Currently this supports Everlocks and the small 44mm pull locks.
 
 ## Installation
 

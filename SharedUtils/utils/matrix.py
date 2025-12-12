@@ -49,9 +49,6 @@ def transform_from_root(origin: Point3D, axis1: Vector3D, axis2: Vector3D) -> Ma
     return t
 
 def transform_to_root(origin: Point3D, axis1: Vector3D, axis2: Vector3D) -> Matrix3D:
-    # t = transform_from_root(origin, axis1, axis2)
-    # t.invert()
-    # return t
     t = Matrix3D.create()
     axis3 = axis1.crossProduct(axis2)
     axis3.normalize()
@@ -64,23 +61,6 @@ def transform_to_root(origin: Point3D, axis1: Vector3D, axis2: Vector3D) -> Matr
         zero, x, y, z,
     )
     return t
-
-
-# Creates a transform into a right-hand coordinate system on the face, so that x is along the long edge of the face, y is towards the center of the face, and z points along cut into the body.
-def transform_into_face(face: adsk.fusion.BRepFace, cut: Vector3D) -> Matrix3D:
-    long_edge, _ = brep.longest_and_adjecent_edge_of_face(face)
-    # define a coordinate system on the face
-    # y is from the longest_edge into the face
-    y = brep.normal_into_face(long_edge, face)
-    # z points down into the body
-    z = vector.normalized(cut)
-    x = y.crossProduct(z)
-    origin = long_edge.startVertex.geometry
-    # if x, computed by y and z, doesn't lign up with the long_edge normal (which is derived from the edge's start to end points), we have to set the origin to the end point
-    if vector.dot_product(x, brep.normal_along_edge(long_edge)) < 0:
-        origin = long_edge.endVertex.geometry
-    return transform_from_root(origin, x, y)
-
 
 def combine_transforms(ts: list[Matrix3D]) -> Matrix3D:
     result = ts[0]

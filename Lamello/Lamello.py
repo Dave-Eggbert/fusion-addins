@@ -472,13 +472,14 @@ parent_dir = os.path.dirname(current_dir)
 shared_folder = os.path.join(parent_dir, "SharedUtils")
 if current_dir not in sys.path: sys.path.append(current_dir)
 if shared_folder not in sys.path: sys.path.append(shared_folder)
-import CustomComputeFeature, Inputs, utils
+import CustomComputeFeature, Inputs, Combine, utils
 import adsk.core, adsk.fusion
 from adsk.core import Point3D, Vector3D
 import math
-utils.misc.force_reload_modules('CustomComputeFeature', 'Inputs', 'utils')
+from typing import cast, Optional
+utils.misc.force_reload_modules('CustomComputeFeature', 'Inputs', 'Combine', 'utils')
 
-_feature: CustomComputeFeature.CustomComputeFeature = None
+_feature: CustomComputeFeature.CustomComputeFeature
 
 def run(context):
     global _feature
@@ -489,11 +490,15 @@ def stop(context):
     del _feature
 
 class LamelloInputs(Inputs.Inputs):
+    class Types:
+        CLAMEX_P10 = Inputs.DropDownInput.Item('Clamex P10', 10)
+        CLAMEX_P14 = Inputs.DropDownInput.Item('Clamex P14', 14)
+
     def __init__(self, units_manager: adsk.core.UnitsManager):
         units = units_manager.defaultLengthUnits
         self.edge = Inputs.SelectionByEntityTokenInput('edge', 'Edge', 'LinearEdges', 1, 0, 'Select edge along which access holes should be placed.')
         self.points = Inputs.SelectionByEntityTokenInput('points', 'Points', 'SketchPoints', 0, 0, 'To manually place the connectors, select sketch points.')
-        self.size = Inputs.DropDownInput('size', 'Variant', [['Clamex P10', 10], ['Clamex P14', 14]], 10, 'Variant of the Lamello connector.')
+        self.size = Inputs.DropDownInput('size', 'Variant', utils.misc.class_property_values(LamelloInputs.Types), LamelloInputs.Types.CLAMEX_P10.value, 'Variant of the Lamello connector.')
         self.spacing = Inputs.FloatInput('spacing', 'Spacing', 20, 'Minimum spacing between the connectors.', units)
         self.offset = Inputs.FloatInput('offset', 'Offset', 6, 'Distance of the first connector from the start of the edge.', units)
         self.through_guide_holes = Inputs.CheckboxInput('throughGuideHoles', 'Through Guide Holes', False, 'If checked the guide holes are punched all the way through to the opposite face.')
@@ -510,38 +515,40 @@ class Lamello(CustomComputeFeature.CustomComputeFeature):
     def create_inputs(self) -> LamelloInputs:
         return LamelloInputs(self.app.activeProduct.unitsManager)
 
-    def execute(self) -> list[CustomComputeFeature.Combine]:
-        combines: list[CustomComputeFeature.Combine] = []
-        for edge in self.inputs.edge.value:
-            access_face, slot_face, guide_face = find_faces(edge)
-            if not guide_face:
+    def execute(self) -> list[Combine.Combine]:
+        combines: list[Combine.Combine] = []
+        for edge in cast(list[adsk.fusion.BRepEdge], self.inputs.edge.value):
+            faces = find_faces(edge)
+            if not faces:
                 continue
+            access_face, slot_face, guide_face = faces[0:3]
             access_holes, guide_holes = create_hole_bodies(edge, access_face, slot_face, guide_face, self.inputs)
-            combines.append(CustomComputeFeature.Combine(access_face.body, access_holes, adsk.fusion.FeatureOperations.CutFeatureOperation))
-            combines.append(CustomComputeFeature.Combine(guide_face.body, guide_holes, adsk.fusion.FeatureOperations.CutFeatureOperation))
+            combines.append(Combine.Combine(access_face.body, access_holes, Combine.Operation.CUT))
+            combines.append(Combine.Combine(guide_face.body, guide_holes, Combine.Operation.CUT))
         return combines
     
-    def pre_select(self, input: adsk.core.SelectionCommandInput, entity: adsk.fusion.BRepEdge) -> bool:
+    def pre_select(self, input: adsk.core.SelectionCommandInput, selection: adsk.fusion.BRepEdge) -> bool:
         if input.id == self.inputs.edge.id:
-            return find_faces(entity) is not None
+            return find_faces(selection) is not None
         else:
             return True
         
-    def input_changed(self, _):
+    def input_changed(self, input):
         spacing_enabled = self.inputs.points.input.selectionCount == 0
         self.inputs.spacing.input.isEnabled = spacing_enabled
         self.inputs.offset.input.isEnabled = spacing_enabled
 
-def find_faces(edge: adsk.fusion.BRepEdge) -> tuple[adsk.fusion.BRepFace, adsk.fusion.BRepFace, adsk.fusion.BRepFace]:
-    access_face, slot_face = get_access_and_slot_faces(edge)
-    if not access_face or not slot_face:
+def find_faces(edge: adsk.fusion.BRepEdge) -> Optional[tuple[adsk.fusion.BRepFace, adsk.fusion.BRepFace, adsk.fusion.BRepFace]]:
+    access_and_slot = get_access_and_slot_faces(edge)
+    if not access_and_slot:
         return None
+    access_face, slot_face = access_and_slot[0:2]
     guide_face = find_guide_face(edge, access_face, slot_face)
     if not guide_face:
         return None
     return access_face, slot_face, guide_face
 
-def find_guide_face(edge: adsk.fusion.BRepEdge, access_face: adsk.fusion.BRepFace, slot_face: adsk.fusion.BRepFace) -> adsk.fusion.BRepFace:
+def find_guide_face(edge: adsk.fusion.BRepEdge, access_face: adsk.fusion.BRepFace, slot_face: adsk.fusion.BRepFace) -> Optional[adsk.fusion.BRepFace]:
     slot_normal = utils.brep.normal_into_face(edge, slot_face)
     slot_dir = utils.vector.scaled_by(slot_normal, 0.5)
     edge_normal = utils.brep.normal_along_edge(edge)
@@ -561,14 +568,13 @@ def find_guide_face(edge: adsk.fusion.BRepEdge, access_face: adsk.fusion.BRepFac
     return utils.brep.find_perpendicular_face_containing_edge(edge, access_face, check_face)
 
 
-def get_access_and_slot_faces(edge: adsk.fusion.BRepEdge) -> tuple[adsk.fusion.BRepFace, adsk.fusion.BRepFace]:
+def get_access_and_slot_faces(edge: adsk.fusion.BRepEdge) -> Optional[tuple[adsk.fusion.BRepFace, adsk.fusion.BRepFace]]:
     access_face = utils.brep.largest_face_of_edge(edge)
-    slot_face = None
+    if not access_face: return None
     for f in edge.faces:
         if f != access_face and utils.brep.is_planar(f):
-            slot_face = f
-            break
-    return (access_face, slot_face)
+            return access_face, f
+    return None
 
 def access_positions_by_spacing(edge: adsk.fusion.BRepEdge, spacing: float, offset: float) -> list[adsk.core.Vector3D]:
     available_length = edge.length - 2 * offset
@@ -581,9 +587,9 @@ def access_positions_by_spacing(edge: adsk.fusion.BRepEdge, spacing: float, offs
 def create_hole_bodies(edge: adsk.fusion.BRepEdge, access_face: adsk.fusion.BRepFace, slot_face: adsk.fusion.BRepFace, guide_face: adsk.fusion.BRepFace, inputs: LamelloInputs) -> tuple[adsk.fusion.BRepBody, adsk.fusion.BRepBody]:
     mgr = adsk.fusion.TemporaryBRepManager.get()
     thickness = utils.brep.get_board_thickness(access_face)
-    positions: list[adsk.core.Point3D]
+    positions: list[adsk.core.Vector3D]
     if len(inputs.points.value) > 0:
-        positions = [p.worldGeometry.asVector() for p in inputs.points.value]
+        positions = [cast(adsk.fusion.SketchPoint, p).worldGeometry.asVector() for p in inputs.points.value]
     else:
         positions = access_positions_by_spacing(edge, inputs.spacing.value, inputs.offset.value)
 
@@ -591,15 +597,17 @@ def create_hole_bodies(edge: adsk.fusion.BRepEdge, access_face: adsk.fusion.BRep
     access_depth = thickness/2
     access_hole_radius = 0.6/2
     access_edge_distance = 0.75
-    if inputs.size.value == 14:
+    if inputs.size.value == LamelloInputs.Types.CLAMEX_P14.value:
         cyl = utils.brep.cylinder(access_hole_radius, -access_depth)
         access_hole = utils.brep.transformed(cyl, utils.matrix.translation_matrix(Vector3D.create(0, access_edge_distance, 0)))
-    else:
+    elif inputs.size.value == LamelloInputs.Types.CLAMEX_P10.value:
         access_hole = utils.brep.slot(0.25, access_hole_radius, access_depth)
         mgr.transform(access_hole, utils.matrix.combine_transforms([
             utils.matrix.rotation_matrix(-math.pi/2, Vector3D.create(0, 0, 1), Point3D.create(0, 0, 0)),
             utils.matrix.translation_matrix(Vector3D.create(0, access_edge_distance, -access_depth))
         ]))
+    else:
+        raise ValueError(f"Invalid Lamello Type: {inputs.size.value}")
 
     guide_hole_depth = utils.brep.get_board_thickness(guide_face) if inputs.through_guide_holes.value else 0.8
     guide_hole_radius = 0.77/2
